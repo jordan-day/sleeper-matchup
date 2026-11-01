@@ -6,7 +6,8 @@ const SCORES_API = 'https://api.sleeper.com/scores/nfl';
 const CDN = 'https://sleepercdn.com';
 
 const CONFIG_KEY = 'matchup:config';
-const PLAYERS_KEY = 'matchup:players';
+// v2 adds fantasy positions, needed to pick which stat line to show.
+const PLAYERS_KEY = 'matchup:players:v2';
 const REFRESH_MS = 15000;
 const PLAYER_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -97,6 +98,7 @@ async function ensurePlayers(ids) {
         p: p.position || (p.fantasy_positions || [])[0] || '',
         t: p.team || '',
         i: p.injury_status || '',
+        fp: p.fantasy_positions || [],
         ts: now,
       };
     } catch {
@@ -202,6 +204,59 @@ function gameInfo(team, games) {
   return { text: opp, live: false };
 }
 
+/* ---------- stat lines ---------- */
+
+const IDP_POSITIONS = new Set(['DL', 'LB', 'DB', 'DE', 'DT', 'NT', 'ILB', 'OLB', 'MLB', 'CB', 'S', 'SS', 'FS', 'IDP']);
+
+// Joins "N LABEL" parts for every stat that is non-zero.
+function counts(s, pairs) {
+  return pairs.filter(([key]) => s[key]).map(([key, label]) => `${+s[key]} ${label}`);
+}
+
+function passing(s) {
+  if (!s.pass_att) return [];
+  return [`${+(s.pass_cmp || 0)}/${+s.pass_att}`, `${+(s.pass_yd || 0)} YD`,
+    ...counts(s, [['pass_td', 'TD'], ['pass_int', 'INT']])];
+}
+function rushing(s) {
+  if (!s.rush_att) return [];
+  return [`${+s.rush_att} CAR`, `${+(s.rush_yd || 0)} YD`, ...counts(s, [['rush_td', 'TD']])];
+}
+function receiving(s) {
+  if (!s.rec && !s.rec_tgt) return [];
+  return [`${+(s.rec || 0)} REC`, `${+(s.rec_yd || 0)} YD`, ...counts(s, [['rec_td', 'TD']])];
+}
+
+// Sleeper-style box score summary, e.g. "4 CAR, 30 YD, 2 REC, 9 YD".
+function statLine(p, s) {
+  if (!p || !s) return [];
+  const positions = [p.p, ...(p.fp || [])];
+  let parts;
+  if (p.p === 'DEF') {
+    parts = counts(s, [['sack', 'SACK'], ['int', 'INT'], ['fum_rec', 'FR'], ['def_td', 'TD'], ['safe', 'SFTY']]);
+    if (s.pts_allow != null) parts.push(`${+s.pts_allow} PA`);
+  } else if (p.p === 'K') {
+    parts = [];
+    if (s.fga) parts.push(`${+(s.fgm || 0)}/${+s.fga} FG`);
+    if (s.xpa) parts.push(`${+(s.xpm || 0)}/${+s.xpa} XP`);
+  } else if (positions.some((pos) => IDP_POSITIONS.has(pos))) {
+    const tackles = s.idp_tkl ?? ((s.idp_tkl_solo || 0) + (s.idp_tkl_ast || 0));
+    parts = [
+      ...(tackles ? [`${+tackles} TKL`] : []),
+      ...counts(s, [['idp_sack', 'SACK'], ['idp_tkl_loss', 'TFL'], ['idp_int', 'INT'], ['idp_pass_def', 'PD'],
+        ['idp_ff', 'FF'], ['idp_fum_rec', 'FR'], ['idp_def_td', 'TD'], ['idp_safe', 'SFTY']]),
+    ];
+  } else if (p.p === 'QB') {
+    parts = [...passing(s), ...rushing(s), ...receiving(s)];
+  } else if (p.p === 'RB') {
+    parts = [...rushing(s), ...receiving(s), ...passing(s)];
+  } else {
+    parts = [...receiving(s), ...rushing(s), ...passing(s)];
+  }
+  if (p.p !== 'DEF') parts.push(...counts(s, [['fum_lost', 'FUM']]));
+  return parts;
+}
+
 /* ---------- data loading ---------- */
 
 async function loadMatchup() {
@@ -222,9 +277,10 @@ async function loadMatchup() {
   const myRoster = rosters.find((r) => r.owner_id === userId || (r.co_owners || []).includes(userId));
   if (!myRoster) return { ...base, empty: 'You don’t have a team in this league.' };
 
-  const [matchups, scores] = await Promise.all([
+  const [matchups, scores, stats] = await Promise.all([
     getJSON(`${API}/league/${leagueId}/matchups/${week}`),
     getJSON(`${SCORES_API}/${state.season_type}/${state.season}/${week}`).catch(() => null),
+    getJSON(`${API}/stats/nfl/${state.season_type}/${state.season}/${week}`).catch(() => null),
   ]);
 
   const me = (matchups || []).find((m) => m.roster_id === myRoster.roster_id);
@@ -258,6 +314,7 @@ async function loadMatchup() {
     slots,
     players,
     games: buildGames(scores),
+    stats: stats || {},
     me: team(myRoster, me),
     opp: opp && oppRoster ? team(oppRoster, opp) : null,
   };
@@ -318,6 +375,10 @@ function playerCell(t, index, side, data, isTop) {
   const pts = t.starterPoints[index] ?? t.playerPoints[id] ?? 0;
   const notStarted = g && g.status === 'pre_game' && !pts;
   const injTag = inj ? `<span class="inj">${esc(inj)}</span>` : '';
+  // Each stat is a nowrap span so lines only break between stats.
+  const statText = g && g.status !== 'pre_game'
+    ? statLine(p, data.stats[id]).map((part) => `<span>${esc(part)}</span>`).join(', ')
+    : '';
   const name = esc(shortName(p));
   return `
     <div class="player ${side}">
@@ -326,6 +387,7 @@ function playerCell(t, index, side, data, isTop) {
         <div class="pname">${side === 'left' ? name + injTag : injTag + name}</div>
         <div class="pmeta">${esc(p ? [p.p, p.t].filter(Boolean).join(' - ') : '')}</div>
         ${info ? `<div class="pgame ${info.live ? 'live' : ''}">${esc(info.text)}</div>` : ''}
+        ${statText ? `<div class="pstats">${statText}</div>` : ''}
       </div>
       <div class="ppts ${isTop ? 'top' : ''}">${notStarted ? '–' : fmtPts(pts)}</div>
     </div>`;
@@ -634,6 +696,8 @@ function renderSettings() {
 }
 
 /* ---------- boot ---------- */
+
+removeStore('matchup:players'); // pre-v2 player cache
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));

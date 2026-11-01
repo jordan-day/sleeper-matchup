@@ -203,6 +203,13 @@ button { font: inherit; color: inherit; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .pgame { color: var(--text-3); }
+.pstats {
+  font-size: 10px; line-height: 1.3; color: var(--text);
+  opacity: .85;
+  margin-top: 1px;
+  white-space: normal;
+}
+.pstats span { white-space: nowrap; }
 .pgame.live { color: var(--live); }
 .player.emptyslot .pname { color: var(--text-3); font-weight: 500; }
 
