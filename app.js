@@ -352,7 +352,7 @@ function teamBlock(t, side, leading) {
     </div>`;
 }
 
-function playerCell(t, index, side, data, isTop) {
+function playerCell(t, index, side, data) {
   if (!t) return `<div class="player ${side}"></div>`;
   const id = t.starters[index];
   if (!id || id === '0') {
@@ -389,15 +389,8 @@ function playerCell(t, index, side, data, isTop) {
         ${info ? `<div class="pgame ${info.live ? 'live' : ''}">${esc(info.text)}</div>` : ''}
         ${statText ? `<div class="pstats">${statText}</div>` : ''}
       </div>
-      <div class="ppts ${isTop ? 'top' : ''}">${notStarted ? '–' : fmtPts(pts)}</div>
+      <div class="ppts ${finished ? 'done' : ''}">${notStarted ? '–' : fmtPts(pts)}</div>
     </div>`;
-}
-
-function rowPoints(t, i) {
-  if (!t) return -Infinity;
-  const id = t.starters[i];
-  if (!id || id === '0') return -Infinity;
-  return Number(t.starterPoints[i] ?? t.playerPoints[id] ?? 0);
 }
 
 function statusText() {
@@ -432,15 +425,12 @@ function renderMatchup(data) {
   const oppLead = opp && opp.points > me.points;
   const live = anyLive(data);
 
-  const rows = data.slots.map((slot, i) => {
-    const a = rowPoints(me, i), b = rowPoints(opp, i);
-    return `
+  const rows = data.slots.map((slot, i) => `
       <div class="row">
-        ${playerCell(me, i, 'left', data, a > b && a > 0)}
+        ${playerCell(me, i, 'left', data)}
         <div class="slot ${esc(slot)}">${esc(SLOT_LABELS[slot] || slot.replace(/_/g, ' '))}</div>
-        ${playerCell(opp, i, 'right', data, b > a && b > 0)}
-      </div>`;
-  }).join('');
+        ${playerCell(opp, i, 'right', data)}
+      </div>`).join('');
 
   app.innerHTML = `
     ${head}

@@ -218,11 +218,12 @@ button { font: inherit; color: inherit; }
   min-width: 32px;
   font-size: 13.5px; font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--text-2);
+  color: var(--text);
 }
 .player.left .ppts { text-align: right; }
 .player.right .ppts { text-align: left; }
-.ppts.top { color: var(--text); }
+/* Player's game is over */
+.ppts.done { color: var(--text-2); }
 
 .slot {
   justify-self: center;
